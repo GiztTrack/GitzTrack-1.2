@@ -1,0 +1,185 @@
+USEALL:
+        SUB     DX,CX
+        MOV     CX,DX
+BINREAD:
+        ADD     CX,[NXTADD]
+        MOV     [NXTADD],CX
+        CMP     CX,[BYTCNT]          
+        CALL    FLSHFIL
+        CMP     [TERMREAD],0
+        JNZ     CLOSESRC              
+        JMP     SHORT COPYLP
+
+TESTDEV:
+        cmp     [SRCISDEV],0
+        JZ      CLOSESRC            
+        CMP     [RDEOF],0
+        JZ      COPYLP                
+CLOSESRC:
+        mov     bx,[SRCHAND]
+        mov     ah,CLOSE
+        INT     int_command
+        return
+
+CLOSEDEST:
+        cmp     [DESTCLOSED],0
+        retnz                          
+        MOV     AL,BYTE PTR [DESTSWITCH]
+        CALL    SETASC                  
+        JZ      BINCLOS
+        MOV     BX,[NXTADD]
+        CMP     BX,[BYTCNT]             
+        JNZ     PUTZ
+        call    TRYFLUSH                
+        jz      NOCONC
+CONCHNG:                                
+        stc
+        return
+NOCONC:
+        XOR     BX,BX
+PUTZ:
+        PUSH    DS
+        MOV     DS,[TPA]
+        MOV     WORD PTR [BX],1AH       
+        POP     DS
+        INC     [NXTADD]
+        MOV     [NOWRITE],0           
+        MOV     AL,[WRITTEN]
+        XOR     AH,AH
+        ADD     AX,[NXTADD]
+        JC      BINCLOS                
+        CMP     AX,1
+        JZ      FORGETIT                
+BINCLOS:
+        call    TRYFLUSH
+        jnz     CONCHNG
+        cmp     [WRITTEN],0
+        jz      FORGETIT               
+        MOV     BX,[DESTHAND]
+        MOV     CX,[CPTIME]
+        MOV     DX,[CPDATE]
+        CMP     [INEXACT],0             
+        JZ      DODCLOSE                
+        MOV     AH,GET_TIME
+        INT     int_command
+        SHL     CL,1
+        SHL     CL,1                   
+        SHL     CX,1
+        SHL     CX,1
+        SHL     CX,1                    
+        SHR     DH,1      
+        OR      CL,DH             
+        PUSH    CX                      
+        MOV     AH,GET_DATE
+        INT     int_command
+        SUB     CX,1980
+        XCHG    CH,CL
+        SHL     CX,1                    
+        SHL     DH,1                    
+        SHL     DH,1
+        SHL     DH,1
+        SHL     DH,1
+        SHL     DH,1                    
+        ADC     CH,0                    
+        OR      DL,DH                   
+        MOV     DH,CH                   
+        POP     CX                      
+DODCLOSE:
+        MOV     AX,(FILE_TIMES SHL 8) OR 1
+        INT     int_command            
+        MOV     AH,CLOSE
+        INT     int_command
+        INC     [FILECNT]
+        INC     [DESTCLOSED]
+RET50:
+        CLC
+        return
+
+FORGETIT:
+        MOV     BX,[DESTHAND]
+        CALL    DODCLOSE                
+        MOV     DX,OFFSET TRANGROUP:DESTBUF
+        MOV     AH,UNLINK
+        INT     int_command             
+        MOV     [FILECNT],0            
+        JMP     RET50
+
+TRYFLUSH:
+        mov     al,[CONCAT]
+        push    ax
+        call    FLSHFIL
+        pop     ax
+        cmp     al,[CONCAT]
+        return
+
+FLSHFIL:
+
+        MOV     [TERMREAD],0
+        cmp     [CFLAG],0
+        JZ      NOTEXISTS
+        JMP     EXISTS
+NOTEXISTS:
+        call    BUILDDEST              
+        CALL    COMPNAME                
+        JNZ     PROCDEST                
+        CMP     [SRCISDEV],0
+        JNZ     PROCDEST                ; Same name on the new name device OK
+        CMP     [CONCAT],0              
+        MOV     DX,OFFSET TRANGROUP:OVERWR
+        JZ      COPERRJ                 
+        MOV     [NOWRITE],1             
+PROCDEST:
+        mov     ax,(OPEN SHL 8) OR 1
+        CMP     [NOWRITE],0
+        JNZ     DODESTOPEN              
+        mov     ah,CREAT
+        xor     cx,cx
+DODESTOPEN:
+        mov     dx,offset trangroup:DESTBUF
+        INT     int_command
+        MOV     DX,OFFSET TRANGROUP:FULDIR
+        JC      COPERRJ
+        mov     [DESTHAND],ax           
+        mov     [CFLAG],1               
+        mov     bx,ax
+        mov     ax,(IOCTL SHL 8)
+        INT     int_command             
+        mov     [DESTISDEV],dl          
+        test    dl,devid_ISDEV
+        jz      EXISTS                  
+        mov     al,BYTE PTR [DESTSWITCH]
+        AND     AL,ASWITCH+BSWITCH
+        JNZ     TESTBOTH
+        MOV     AL,[ASCII]              
+        OR      AL,[BINARY]
+        JZ      EXSETA                  
+TESTBOTH:
+        JPE     EXISTS                  
+        test    AL,BSWITCH
+        jz      EXISTS                  
+        mov     ax,(IOCTL SHL 8) OR 1
+        xor     dh,dh
+        or      dl,devid_RAW
+        mov     [DESTISDEV],dl          
+        INT     int_command             
+        jmp     short EXISTS
+
+COPERRJ:
+        jmp     SHORT COPERR
+
+EXSETA:
+        mov     [ASCII],ASWITCH         
+        or      [INEXACT],ASWITCH     
+EXISTS:
+        cmp     [NOWRITE],0
+        jnz     NOCHECKING      
+        CALL    COMPNAME          
+        JNZ     NOCHECKING             
+        CMP     [SRCISDEV],0
+        JNZ     NOCHECKING              
+        MOV     DX,OFFSET TRANGROUP:LOSTERR
+        CALL    PRINT
+        MOV     [NXTADD],0              
+        INC     [TERMREAD]              
+RET60:
+        return
